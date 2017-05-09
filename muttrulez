@@ -1,0 +1,104 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Net::IMAP::Client;
+use Encode;
+use MIME::Base64;
+use YAML::XS;
+
+my $imap = get_imap();
+
+my $ids = $imap->search({ FROM => 'ugyfelszolgalat@online.fogaz.hu' });
+my $sums = $imap->get_summaries($ids);
+my %sums;
+@sums{@$ids} = map { [ read_summary($_) ] } @$sums;
+print Dump \%sums;
+
+foreach my $id (keys %sums) {
+foreach my $part (@{$sums{$id}}) {
+    next unless $part->{type} eq 'application/pdf';
+    my $body_raw = $imap->get_part_body($id, $part->{part_id});
+    my $body = $part->{encoding} eq 'base64'
+        ? decode_base64($$body_raw)
+        : $$body_raw;
+    my $name = "$id-" . ($part->{name} // 'tmp.pdf');
+    open my $pdf, ">", $name or die $!;
+    print $pdf $body;
+    close $pdf;
+    print "\n$name\n\n";
+    open my $txt, "pdftotext $name - |" or die $!;
+    my $prev;
+    while (<$txt>) {
+        print $prev, $_ if /Sasadi|Galgóczy/;
+        $prev = $_;
+    }
+}}
+
+# Create logged on IMAP object from config file
+sub get_imap {
+    my $cfg = read_mutt();
+    my $imap = Net::IMAP::Client->new(
+        server => $cfg->{imap_server},
+        user => $cfg->{imap_user},
+        pass => $cfg->{imap_pass},
+        ssl => $cfg->{imap_ssl},
+        ssl_verify_peer => 0,
+    );
+    $imap->login or die $imap->last_error;
+    $imap->select($cfg->{imap_folder});
+    return $imap;
+}
+
+# Read config from user's .muttrc
+sub read_mutt {
+    my $home = (getpwuid $<)[-2];
+    open my $muttrc, "$home/.muttrc" or die $!;
+    my %mutt = map { /^\s*set\s+(\w+)\s*=\s*"?([^"]+)"?\s*\n$/ } <$muttrc>;
+
+    my (undef, $protocol, $server, $folder) =
+        $mutt{folder} =~ m|^((imap.)://)?([^/]+)/(\w+)|;
+    my $ssl = ($protocol // '') eq 'https' || $mutt{ssl_starttls};
+    return {
+        imap_server => $server,
+        imap_folder => $folder,
+        imap_record => $mutt{record},
+        imap_user => $mutt{imap_user},
+        imap_pass => $mutt{imap_pass},
+        imap_ssl => $ssl,
+        smtp_url => $mutt{smtp_url},
+        smtp_pass => $mutt{smtp_pass},
+    }
+}
+
+# Convert an email summary to a list of parts with fields below if applicable:
+# from, to, cc, subject, date, type, flags, part_id, name.
+# One element always exists and includes addressing.
+# Other parts returned only in case of a multipart email.
+# Returns main element only in scalar context.
+sub read_summary {
+    my $sum = shift;
+    my $self;
+    print Dump $sum;
+    $self->{part_id} = $sum->{part_id} if defined $sum->{part_id};
+    $self->{type} =
+        defined $sum->{type}           ? "$sum->{type}/$sum->{subtype}"     :
+        defined $sum->{multipart_type} ? "multipart/$sum->{multipart_type}" :
+                                         undef
+        or delete $self->{type};
+    $sum->{from} and $self->{from} = [ map { $_->email } @{$sum->{from}} ];
+    $sum->{to} and $self->{to} = [ map { $_->email } @{$sum->{to}} ];
+    $sum->{cc} and $self->{cc} = [ map { $_->email } @{$sum->{cc}} ];
+    $sum->{subject} and $self->{subject} = decode('MIME-Header',  $sum->{subject});
+    $sum->{date} and $self->{date} = $sum->{date};
+    $sum->{flags} and $self->{flags} = $sum->{flags};
+    $sum->{parameters} and $sum->{parameters}{name} and
+        $self->{name} = decode('MIME-Header', $sum->{parameters}{name});
+    $sum->{transfer_encoding} and $self->{encoding} = $sum->{transfer_encoding};
+
+    return $self unless wantarray;
+    my @list = ($self);
+    return @list unless ref $sum->{parts} eq 'ARRAY';
+
+    push @list,  map { read_summary($_) } @{$sum->{parts}};
+    return @list;
+}
