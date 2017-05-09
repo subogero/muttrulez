@@ -14,25 +14,42 @@ my %sums;
 @sums{@$ids} = map { [ read_summary($_) ] } @$sums;
 print Dump \%sums;
 
-foreach my $id (keys %sums) {
-foreach my $part (@{$sums{$id}}) {
-    next unless $part->{type} eq 'application/pdf';
-    my $body_raw = $imap->get_part_body($id, $part->{part_id});
-    my $body = $part->{encoding} eq 'base64'
-        ? decode_base64($$body_raw)
-        : $$body_raw;
-    my $name = "$id-" . ($part->{name} // 'tmp.pdf');
-    open my $pdf, ">", $name or die $!;
-    print $pdf $body;
-    close $pdf;
-    print "\n$name\n\n";
-    open my $txt, "pdftotext $name - |" or die $!;
-    my $prev;
-    while (<$txt>) {
-        print $prev, $_ if /Sasadi|Galgóczy/;
-        $prev = $_;
+ID: foreach my $id (keys %sums) {
+    my $name;
+    next ID if grep { /\$Forwarded/ } @{$sums{$id}->[0]{flags}};
+    PART: foreach my $part (@{$sums{$id}}) {
+        print "$id.$part->{part_id}\n" if $part->{part_id};
+        next PART unless $part->{type} eq 'application/pdf';
+        my $body_raw = $imap->get_part_body($id, $part->{part_id});
+        my $body = $part->{encoding} eq 'base64'
+            ? decode_base64($$body_raw)
+            : $$body_raw;
+        $name = $part->{name} // 'tmp.pdf';
+        open my $pdf, ">", $name or die $!;
+        print $pdf $body;
+        close $pdf;
+        open my $txt, "pdftotext $name - |" or die $!;
+        while (<$txt>) {
+            next unless /Sasadi/;
+            print;
+            my $subj = $sums{$id}->[0]{subject};
+            open my $mutt,
+                "| mutt -s '$subj' -a '$name' -- szg\@subogero.com"
+                or print $! and next PART;
+            print $mutt <<EOF;
+Gázszámla továbbítva
+
+Üdv
+Gerő
+EOF
+            close $mutt;
+            print Dump 'add_flags', $imap->add_flags($id, '$Forwarded');
+            next ID;
+        }
+    } continue {
+        unlink $name if $name && -f $name;
     }
-}}
+}
 
 # Create logged on IMAP object from config file
 sub get_imap {
@@ -78,7 +95,6 @@ sub read_mutt {
 sub read_summary {
     my $sum = shift;
     my $self;
-    print Dump $sum;
     $self->{part_id} = $sum->{part_id} if defined $sum->{part_id};
     $self->{type} =
         defined $sum->{type}           ? "$sum->{type}/$sum->{subtype}"     :
