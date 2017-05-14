@@ -1,0 +1,132 @@
+.TH "MUTTRULEZ" "1" "" "" "Version 0"
+.PP
+Email rule engine for mutt users.
+Use from cron to run rules automatically.
+Supports IMAP for reading and whatever mutt uses for sending.
+Takes IMAP config from ~/.muttrc
+.SH SYNOPSYS
+.PP
+\f[C]muttrulez\f[]
+.SH CONFIGURATION
+.PP
+Place your rules in ~/.muttrulez in YAML format.
+.PP
+The config contains a list of rules, each with 3 mandatory fields: name,
+search, steps.
+.SS EXAMPLE CONFIG FILE
+.IP
+.nf
+\f[C]
+\-\-\-
+\-\ name:\ Forward\ PDF
+\ \ search:
+\ \ \ \ FROM:\ foo\@bar.hu
+\ \ steps:
+\ \ \-\ action:\ accept
+\ \ \ \ type:\ attachment
+\ \ \ \ mime:\ application/pdf
+\ \ \ \ save:\ 1
+\ \ \-\ action:\ accept
+\ \ \ \ type:\ pipegrep
+\ \ \ \ cmd:\ pdftotext\ _\ \-
+\ \ \ \ regex:\ Eggs
+\ \ \-\ action:\ accept
+\ \ \ \ type:\ email
+\ \ \ \ to:\ baz\@spam.com
+\ \ \ \ attach:\ _
+\ \ \ \ text:\ |
+\ \ \ \ \ \ Hi\ Baz,
+\ \ \ \ \ \ PDF\ with\ Eggs\ forwarded.
+\ \ \ \ \ \ Yours\ Truly,\ Me
+\ \ \-\ type:\ add_flags
+\ \ \ \ flag:\ $Forwarded
+\f[]
+.fi
+.SH SEARCH
+.PP
+The search field contains a hash with IMAP compliant fields as keys.
+.SH STEPS
+.PP
+There is a flat list of steps, which process all your conditions and
+actions.
+.PP
+Each step returns a list of values internally, depending on the type.
+.PP
+Each steps in turn takes the return list of the previous step, which you
+can refer to as the \f[C]_\f[] symbol.
+.PP
+The \f[C]action\f[] field of each step determines whether to continue
+processing further steps:
+.IP \[bu] 2
+accept, rule returned list: continue next step, pass list
+.IP \[bu] 2
+accept, rule returned nothing: stop rule on email
+.IP \[bu] 2
+reject, rule returned list: stop rule on email
+.IP \[bu] 2
+reject, rule returned nothing: continue next step, pass 1
+.SH CURRENTLY SUPPORTED STEP TYPES
+.SS flag
+.PP
+Continue or abort on certain MIME flags found on email.
+.PP
+Fields:
+.IP \[bu] 2
+flag: IMAP flag you\[aq]re looking for
+.PP
+Returns: the specified flag if found on email, or nothing
+.SS attachment
+.PP
+Searches for and optionally saves attachments of certain types.
+.PP
+Fields:
+.IP \[bu] 2
+mime: MIME type of attachment you\[aq]re looking for
+.IP \[bu] 2
+save: 1 to save file temorarily for next steps
+.PP
+Returns: filenames of matching attachments
+.SS pipegrep
+.PP
+Run a program for each element in input, search regex in its STDOUT.
+.PP
+Fields:
+.IP \[bu] 2
+cmd: command line to run, refer to input element with \f[C]_\f[]
+.IP \[bu] 2
+regex: pattern to search for in command\[aq]s STDOUT
+.PP
+Returns: input elements for with pattern was found in commands STDOUT.
+.SS email
+.PP
+Send email using mutt.
+.PP
+Fields:
+.IP \[bu] 2
+to: email address
+.IP \[bu] 2
+attach: filename or \f[C]_\f[] to attach input list of filees
+.IP \[bu] 2
+subject: optional, processed email\[aq]s is used when missing
+.IP \[bu] 2
+text: text of email body
+.PP
+Returns: 1 if mutt sends email successfully.
+.SS add_flags
+.PP
+Set flags for emails:
+.PP
+Fields:
+.IP \[bu] 2
+flag: flag name to set
+.PP
+Returns: (1, ...) on success
+.SS del_flags
+.PP
+Delete flags for emails:
+.PP
+Fields:
+.IP \[bu] 2
+flag: flag name to set
+.PP
+Returns: (1, ...) on success

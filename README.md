@@ -1,17 +1,23 @@
-# muttrulez (1)
+% MUTTRULEZ(1) | Version 0
+%
+% 2017-05-14
 
 Email rule engine for mutt users. Use from cron to run rules automatically.
 Supports IMAP for reading and whatever mutt uses for sending.
 Takes IMAP config from ~/.muttrc
 
-## Configuration
+# SYNOPSYS
+
+`muttrulez`
+
+# CONFIGURATION
 
 Place your rules in ~/.muttrulez in YAML format.
 
 The config contains a list of rules, each with 3 mandatory fields:
 name, search, steps.
 
-### Example config file
+## EXAMPLE CONFIG FILE
 
     ---
     - name: Forward PDF
@@ -37,11 +43,11 @@ name, search, steps.
       - type: add_flags
         flag: $Forwarded
 
-## Search
+# SEARCH
 
 The search field contains a hash with IMAP compliant fields as keys.
 
-## Steps
+# STEPS
 
 There is a flat list of steps, which process all your conditions and actions.
 
@@ -58,42 +64,46 @@ further steps:
 * reject, rule returned list: stop rule on email
 * reject, rule returned nothing: continue next step, pass 1
 
-## Currently supported step types
+# CURRENTLY SUPPORTED STEP TYPES
 
-### flag
+## flag
 
 Continue or abort on certain MIME flags found on email.
 
 Fields:
+
 * flag: IMAP flag you're looking for
 
 Returns: the specified flag if found on email, or nothing
 
-### attachment
+## attachment
 
 Searches for and optionally saves attachments of certain types.
 
 Fields:
+
 * mime: MIME type of attachment you're looking for
 * save: 1 to save file temorarily for next steps
 
 Returns: filenames of matching attachments
 
-### pipegrep
+## pipegrep
 
 Run a program for each element in input, search regex in its STDOUT.
 
 Fields:
+
 * cmd: command line to run, refer to input element with `_`
 * regex: pattern to search for in command's STDOUT
 
 Returns: input elements for with pattern was found in commands STDOUT.
 
-### email
+## email
 
 Send email using mutt.
 
 Fields:
+
 * to: email address
 * attach: filename or `_` to attach input list of filees
 * subject: optional, processed email's is used when missing
@@ -101,20 +111,22 @@ Fields:
 
 Returns: 1 if mutt sends email successfully.
 
-### add_flags
+## add_flags
 
 Set flags for emails:
 
 Fields:
+
 * flag: flag name to set
 
 Returns: (1, ...) on success
 
-### del_flags
+## del_flags
 
 Delete flags for emails:
 
 Fields:
+
 * flag: flag name to set
 
 Returns: (1, ...) on success
