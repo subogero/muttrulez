@@ -4,51 +4,143 @@ use warnings;
 use Net::IMAP::Client;
 use Encode;
 use MIME::Base64;
-use YAML::XS;
+use YAML::XS qw(Dump Load LoadFile);
+use File::Temp qw(tempdir);
 
+chdir tempdir(CLEANUP => 1);
+
+my $home = (getpwuid $<)[-2];
 my $imap = get_imap();
+my $rulez = LoadFile "$home/.muttrulez";
 
-my $ids = $imap->search({ FROM => 'ugyfelszolgalat@online.fogaz.hu' });
-my $sums = $imap->get_summaries($ids);
-my %sums;
-@sums{@$ids} = map { [ read_summary($_) ] } @$sums;
-print Dump \%sums;
+# Default steps in each rule to indicate if muttrulez has seen an email
+my @default_steps = ({
+    action => 'reject',
+    type => 'flag',
+    flag => '$Muttrulez',
+}, {
+    action => 'accept',
+    type => 'add_flags',
+    flag => '$Muttrulez',
+});
 
-ID: foreach my $id (keys %sums) {
-    my $name;
-    next ID if grep { /\$Forwarded/ } @{$sums{$id}->[0]{flags}};
-    PART: foreach my $part (@{$sums{$id}}) {
-        print "$id.$part->{part_id}\n" if $part->{part_id};
-        next PART unless $part->{type} eq 'application/pdf';
+RULE: foreach my $rule (@$rulez) {
+    next unless ref $rule eq 'HASH';
+    print "Running $rule->{name}\n";
+    ref $rule->{search} eq 'HASH' or print 'search key missing' and next;
+    my %sums = search($rule->{search});
+    ID: foreach my $id (keys %sums) {
+        print Dump $sums{$id};
+        my @ret;
+        STEP: foreach my $step (@default_steps, @{$rule->{steps}}) {
+            @ret = run_step_on_id($step, $id, $sums{$id}, @ret);
+            unless (@ret) {
+                delete $sums{$id};
+                next ID;
+            }
+            next RULE unless %sums;
+        }
+    }
+}
+
+sub search {
+    my $ids = $imap->search(shift);
+    my $sums = $imap->get_summaries($ids);
+    my %sums;
+    @sums{@$ids} = map { [ read_summary($_) ] } @$sums;
+    return %sums;
+}
+
+sub run_step_on_id {
+    my ($step, $id, $sum, @prev) = @_;
+    my %step_map = (
+        flag => \&step_flag,
+        attachment => \&step_attachment,
+        pipegrep => \&step_pipegrep,
+        email => \&step_email,
+        add_flags =>\&step_add_flags,
+        del_flags =>\&step_del_flags,
+    );
+    print "Running step $step->{type} on $id\n";
+    my @ret = $step_map{$step->{type}}($step, $id, $sum, @prev);
+    $step->{action} //= 'reject';
+    my @action =
+        $step->{action} eq 'accept' ? @ret :
+        @ret                        ? () :
+                                      1;
+    print Dump { prev => \@prev, ret => \@ret, return => \@action };
+    return @action;
+}
+
+sub step_flag {
+    my ($step, $id, $sum, @prev) = @_;
+    return grep { $_ eq $step->{flag} } @{$sum->[0]{flags}};
+}
+
+sub step_attachment {
+    my ($step, $id, $sum, @prev) = @_;
+    my $mime = $step->{mime};
+    my $ext = (split '/', $mime)[-1];
+    my @parts = grep { $_->{type} eq $mime } @$sum;
+    my @names;
+    PART: foreach my $part (@parts) {
+        my $name = $part->{name} // "$id.$part->{part_id}.$ext";
+        push @names, $name;
+        next unless $step->{save};
         my $body_raw = $imap->get_part_body($id, $part->{part_id});
         my $body = $part->{encoding} eq 'base64'
             ? decode_base64($$body_raw)
             : $$body_raw;
-        $name = $part->{name} // 'tmp.pdf';
         open my $pdf, ">", $name or die $!;
         print $pdf $body;
         close $pdf;
-        open my $txt, "pdftotext $name - |" or die $!;
-        while (<$txt>) {
-            next unless /Sasadi/;
-            print;
-            my $subj = $sums{$id}->[0]{subject};
-            open my $mutt,
-                "| mutt -s '$subj' -a '$name' -- szg\@subogero.com"
-                or print $! and next PART;
-            print $mutt <<EOF;
-Gázszámla továbbítva
-
-Üdv
-Gerő
-EOF
-            close $mutt;
-            print Dump 'add_flags', $imap->add_flags($id, '$Forwarded');
-            next ID;
-        }
-    } continue {
-        unlink $name if $name && -f $name;
     }
+    return @names;
+}
+
+sub step_pipegrep {
+    my ($step, $id, $sum, @prev) = @_;
+    my %args = map { $_ => 1 } @prev;
+    ARG: foreach my $arg (keys %args) {
+        my $cmd = $step->{cmd};
+        $cmd =~ s/\b_\b/$arg/;
+        open my $fd, "$cmd |" or die $!;
+        my $txt;
+        $txt .= $_ while <$fd>;
+        delete $args{$arg} unless $txt =~ /$step->{regex}/;
+    }
+    return keys %args;
+}
+
+sub step_email {
+    my ($step, $id, $sum, @prev) = @_;
+    my $subj = $step->{subject} // $sum->[0]{subject};
+    my $cmd = "mutt -s '$subj'";
+    if ($step->{attach} eq '_') {
+        my @files = map { "'$_'" } @prev;
+        $cmd .= " -a @files --";
+    } elsif (ref $step->{attach} eq 'ARRAY') {
+        my @files = map { "'$_'" } @{$step->{attach}};
+        $cmd .= " -a @files --";
+    } elsif (! ref $step->{attach}) {
+        $cmd .= " -a '$step->{attach}' --";
+    }
+    $cmd .= " $step->{to}";
+    open my $mutt, "| $cmd" or die $!;
+    binmode $mutt, ":utf8";
+    print $mutt $step->{text};
+    close $mutt;
+    return not $?;
+}
+
+sub step_add_flags {
+    my ($step, $id, $sum, @prev) = @_;
+    $imap->add_flags($id, $step->{flag});
+}
+
+sub step_del_flags {
+    my ($step, $id, $sum, @prev) = @_;
+    $imap->del_flags($id, $step->{flag});
 }
 
 # Create logged on IMAP object from config file
@@ -68,7 +160,6 @@ sub get_imap {
 
 # Read config from user's .muttrc
 sub read_mutt {
-    my $home = (getpwuid $<)[-2];
     open my $muttrc, "$home/.muttrc" or die $!;
     my %mutt = map { /^\s*set\s+(\w+)\s*=\s*"?([^"]+)"?\s*\n$/ } <$muttrc>;
 
