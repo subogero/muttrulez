@@ -8,7 +8,8 @@ Takes IMAP config from ~/.muttrc
 
 # SYNOPSYS
 
-`muttrulez`
+    muttrulez
+    muttrulez <config>
 
 # CONFIGURATION
 
@@ -19,6 +20,10 @@ name, search, steps.
 
 ## EXAMPLE CONFIG FILE
 
+Look for emails from foo@bar.hu with PDF attachments, save them in ~/Downloads,
+if PDF contains text 'Eggs', forward it to baz@spam.com with default email text
+body, flag such emails with $Forwarded.
+
     ---
     - name: Forward PDF
       search:
@@ -27,7 +32,7 @@ name, search, steps.
       - action: accept
         type: attachment
         mime: application/pdf
-        save: 1
+        save: ~/Downloads
       - action: accept
         type: pipegrep
         cmd: pdftotext _ -
@@ -83,7 +88,7 @@ Searches for and optionally saves attachments of certain types.
 Fields:
 
 * mime: MIME type of attachment you're looking for
-* save: 1 to save file temorarily for next steps
+* save: folder to save file permanently, optional
 
 Returns: filenames of matching attachments
 

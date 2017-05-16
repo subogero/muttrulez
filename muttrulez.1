@@ -5,8 +5,13 @@ Use from cron to run rules automatically.
 Supports IMAP for reading and whatever mutt uses for sending.
 Takes IMAP config from ~/.muttrc
 .SH SYNOPSYS
-.PP
-\f[C]muttrulez\f[]
+.IP
+.nf
+\f[C]
+muttrulez
+muttrulez\ <config>
+\f[]
+.fi
 .SH CONFIGURATION
 .PP
 Place your rules in ~/.muttrulez in YAML format.
@@ -14,6 +19,11 @@ Place your rules in ~/.muttrulez in YAML format.
 The config contains a list of rules, each with 3 mandatory fields: name,
 search, steps.
 .SS EXAMPLE CONFIG FILE
+.PP
+Look for emails from foo\@bar.hu with PDF attachments, save them in
+~/Downloads, if PDF contains text \[aq]Eggs\[aq], forward it to
+baz\@spam.com with default email text body, flag such emails with
+$Forwarded.
 .IP
 .nf
 \f[C]
@@ -25,7 +35,7 @@ search, steps.
 \ \ \-\ action:\ accept
 \ \ \ \ type:\ attachment
 \ \ \ \ mime:\ application/pdf
-\ \ \ \ save:\ 1
+\ \ \ \ save:\ ~/Downloads
 \ \ \-\ action:\ accept
 \ \ \ \ type:\ pipegrep
 \ \ \ \ cmd:\ pdftotext\ _\ \-
@@ -83,7 +93,7 @@ Fields:
 .IP \[bu] 2
 mime: MIME type of attachment you\[aq]re looking for
 .IP \[bu] 2
-save: 1 to save file temorarily for next steps
+save: folder to save file permanently, optional
 .PP
 Returns: filenames of matching attachments
 .SS pipegrep

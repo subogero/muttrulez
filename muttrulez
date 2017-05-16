@@ -7,28 +7,27 @@ use MIME::Base64;
 use YAML::XS qw(Dump Load LoadFile);
 use File::Temp qw(tempdir);
 
-chdir tempdir(CLEANUP => 1);
-
 my $home = (getpwuid $<)[-2];
 my $imap = get_imap();
-my $rulez = LoadFile "$home/.muttrulez";
+my $cfgfile = shift // "$home/.muttrulez";
+my $rulez = LoadFile $cfgfile;
 
-# Default steps in each rule to indicate if muttrulez has seen an email
+# Default steps in each rule to exclude emails already seen by muttrulez
 my @default_steps = ({
     action => 'reject',
     type => 'flag',
     flag => '$Muttrulez',
-}, {
-    action => 'accept',
-    type => 'add_flags',
-    flag => '$Muttrulez',
 });
 
+chdir tempdir(CLEANUP => 1);
+
+my %seen;
 RULE: foreach my $rule (@$rulez) {
     next unless ref $rule eq 'HASH';
     print "Running $rule->{name}\n";
     ref $rule->{search} eq 'HASH' or print 'search key missing' and next;
     my %sums = search($rule->{search});
+    @seen{keys %sums} = values %sums;
     ID: foreach my $id (keys %sums) {
         print Dump $sums{$id};
         my @ret;
@@ -42,6 +41,9 @@ RULE: foreach my $rule (@$rulez) {
         }
     }
 }
+
+# Indicate muttrulez has seen all specified emails
+$imap->add_flags([ keys %seen ], [ '$Muttrulez' ]);
 
 sub search {
     my $ids = $imap->search(shift);
@@ -82,20 +84,33 @@ sub step_attachment {
     my $mime = $step->{mime};
     my $ext = (split '/', $mime)[-1];
     my @parts = grep { $_->{type} eq $mime } @$sum;
+    my $savedir = savedir($step->{save});
     my @names;
     PART: foreach my $part (@parts) {
         my $name = $part->{name} // "$id.$part->{part_id}.$ext";
+        $name = "${savedir}$name";
         push @names, $name;
-        next unless $step->{save};
         my $body_raw = $imap->get_part_body($id, $part->{part_id});
         my $body = $part->{encoding} eq 'base64'
             ? decode_base64($$body_raw)
             : $$body_raw;
+        print "Saving $name\n";
         open my $pdf, ">", $name or die $!;
         print $pdf $body;
         close $pdf;
     }
     return @names;
+}
+
+sub savedir {
+    my $savedir = shift;
+    return '' unless defined $savedir;
+    return '' if $savedir =~ /\*/;
+    $savedir =~ s|^~/|$home/|;
+    $savedir =~ s|/$||;
+    return '' unless -d $savedir;
+    $savedir .= '/';
+    return $savedir;
 }
 
 sub step_pipegrep {
