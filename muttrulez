@@ -6,11 +6,27 @@ use Encode;
 use MIME::Base64;
 use YAML::XS qw(Dump Load LoadFile);
 use File::Temp qw(tempdir);
+use List::Util qw(max);
+use Getopt::Long;
+
+my $opt = {};
+GetOptions($opt, 'unit|u', 'help|h');
 
 my $home = (getpwuid $<)[-2];
 my $imap = get_imap();
 my $cfgfile = shift // "$home/.muttrulez";
 my $rulez = LoadFile $cfgfile;
+
+if ($opt->{unit}) {
+    print imap_date('22d'), "\n";
+    print imap_date('7m'), "\n";
+    print imap_date('3y'), "\n";
+    my %sums = search($rulez->[0]{search});
+    my $max = max keys %sums;
+    print Dump { $max => $sums{$max} };
+    print Dump [ $imap->folders ];
+    exit;
+}
 
 # Default steps in each rule to exclude emails already seen by muttrulez
 my @default_steps = ({
@@ -44,13 +60,48 @@ RULE: foreach my $rule (@$rulez) {
 
 # Indicate muttrulez has seen all specified emails
 $imap->add_flags([ keys %seen ], [ '$Muttrulez' ]);
+$imap->expunge;
 
 sub search {
-    my $ids = $imap->search(shift);
+    my $terms = shift;
+    foreach (keys %$terms) {
+        next unless /^SENT|BEFORE$|SINCE$/;
+        $terms->{$_} = imap_date($terms->{$_});
+    }
+    my $ids = $imap->search($terms);
     my $sums = $imap->get_summaries($ids);
     my %sums;
     @sums{@$ids} = map { [ read_summary($_) ] } @$sums;
     return %sums;
+}
+
+sub imap_date {
+    my $date = shift;
+    print "date in: $date\n";
+    return $date if $date =~ /^\d{2}-[A_Z][a-z]{2}-\d{4}$/;
+    die "Invalid delta date $date" unless $date =~ /^\d+[dmy]$/;
+
+    my @monnames = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+    my ($s, $min, $h, $mday, $mon, $year) = localtime;
+    $year += 1900;
+
+    if ($date =~ /^(\d+)d/) {
+        my $dday = $1;
+        my $t = time - 3600 * 24 * $dday;
+        ($s, $min, $h, $mday, $mon, $year) = localtime $t;
+        $year += 1900;
+    } elsif ($date =~ /^(\d+)m/) {
+        $mon -= $1;
+        if ($mon < 0) {
+            use integer;
+            $year -= $mon / 12 + 1;
+            $mon %= 12;
+        }
+    } elsif ($date =~ /^(\d+)y/) {
+        $year -= $1;
+    }
+    print "date out: $mday-$monnames[$mon]-$year\n";
+    return "$mday-$monnames[$mon]-$year";
 }
 
 sub run_step_on_id {
@@ -62,6 +113,9 @@ sub run_step_on_id {
         email => \&step_email,
         add_flags =>\&step_add_flags,
         del_flags =>\&step_del_flags,
+        copy => \&step_copy,
+        move => \&step_move,
+        delete => \&step_delete,
     );
     print "Running step $step->{type} on $id\n";
     my @ret = $step_map{$step->{type}}($step, $id, $sum, @prev);
@@ -156,6 +210,22 @@ sub step_add_flags {
 sub step_del_flags {
     my ($step, $id, $sum, @prev) = @_;
     $imap->del_flags($id, $step->{flag});
+}
+
+sub step_copy {
+    my ($step, $id, $sum, @prev) = @_;
+    $imap->copy($id, $step->{folder});
+}
+
+sub step_move {
+    my ($step, $id, $sum, @prev) = @_;
+    $imap->copy($id, $step->{folder});
+    $imap->add_flags($id, '\\Deleted');
+}
+
+sub step_delete {
+    my ($step, $id, $sum, @prev) = @_;
+    $imap->add_flags($id, '\\Deleted');
 }
 
 # Create logged on IMAP object from config file
