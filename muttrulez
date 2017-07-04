@@ -17,7 +17,10 @@ my $imap = get_imap();
 my $cfgfile = shift // "$home/.muttrulez";
 my $rulez = LoadFile $cfgfile;
 
-if ($opt->{unit}) {
+if ($opt->{help}) {
+    system "man muttrulez" and system "man muttrulez.1";
+    exit;
+} elsif ($opt->{unit}) {
     print imap_date('22d'), "\n";
     print imap_date('7m'), "\n";
     print imap_date('3y'), "\n";
