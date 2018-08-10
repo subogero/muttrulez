@@ -21,13 +21,15 @@ if ($opt->{help}) {
     system "man muttrulez" and system "man muttrulez.1";
     exit;
 } elsif ($opt->{unit}) {
-    print imap_date('22d'), "\n";
-    print imap_date('7m'), "\n";
-    print imap_date('3y'), "\n";
+    #print imap_date('22d'), "\n";
+    #print imap_date('7m'), "\n";
+    #print imap_date('3y'), "\n";
     my %sums = search($rulez->[0]{search});
     my $max = max keys %sums;
     print Dump { $max => $sums{$max} };
-    print Dump [ $imap->folders ];
+    step_del_flags({flag => '$Muttrulez'}, $max);
+    step_del_flags({flag => '\Seen'}, $max);
+    #print Dump [ $imap->folders ];
     exit;
 }
 
@@ -49,10 +51,12 @@ RULE: foreach my $rule (@$rulez) {
     @seen{keys %sums} = values %sums;
     ID: foreach my $id (keys %sums) {
         print Dump $sums{$id};
+        my $flag_seen = grep { $_ eq '\Seen' } @{$sums{$id}->[0]{flags}};
         my @ret;
         STEP: foreach my $step (@default_steps, @{$rule->{steps}}) {
             @ret = run_step_on_id($step, $id, $sums{$id}, @ret);
             unless (@ret) {
+                step_del_flags({flag => '\Seen'}, $id) unless $flag_seen;
                 delete $sums{$id};
                 next ID;
             }

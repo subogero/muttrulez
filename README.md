@@ -83,7 +83,7 @@ extra fields.
 
 ## flag
 
-Continue or abort on certain MIME flags found on email.
+Continue or abort on certain IMAP flags found on email.
 
 Fields:
 
